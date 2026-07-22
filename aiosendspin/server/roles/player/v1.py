@@ -28,7 +28,7 @@ from aiosendspin.models.core import (
     StreamStartPayload,
 )
 from aiosendspin.models.player import PlayerCommandPayload, StreamStartPlayer, SupportedAudioFormat
-from aiosendspin.models.types import PlayerCommand
+from aiosendspin.models.types import PlayerCommand, PlayerState
 from aiosendspin.server.audio import AudioFormat, BufferTracker
 from aiosendspin.server.roles.base import (
     AudioChunk,
@@ -679,9 +679,8 @@ class PlayerV1Role(Role):
         # Fall back to legacy player.state for availability only when the compliant
         # top-level field is absent.
         if state.state is not None and payload.available is None:
-            create_task(
-                self._client.handle_availability_change(available=state.state != "external_source")
-            )
+            available = state.state != PlayerState.EXTERNAL_SOURCE.value
+            create_task(self._client.handle_availability_change(available=available))
 
         support = self._client.info.player_support
         commands = support.supported_commands if support else []
