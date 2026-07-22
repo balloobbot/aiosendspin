@@ -1342,10 +1342,7 @@ class SendspinConnection:
             return self._server.min_pin_length
         client_min = descriptor.min_pin_length
         if client_min is None or not MIN_PIN_DIGITS <= client_min <= MAX_PIN_DIGITS:
-            # Descriptor present but its floor is unusable: fall back to our own and let the
-            # client arbitrate the resulting length via pin_length_unacceptable, rather than
-            # tearing down a connection the spec permits retrying.
-            return self._server.min_pin_length
+            raise PairingError("client does not (correctly) offer dynamic PIN pairing")
         # Both floors are validated to [MIN_PIN_DIGITS, MAX_PIN_DIGITS], so the max stays in range.
         return max(client_min, self._server.min_pin_length)
 

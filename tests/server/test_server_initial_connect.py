@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from aiohttp import ClientConnectionError, ClientWebSocketResponse
 
-from aiosendspin.models.core import ClientHelloPayload, PairMethodDescriptor
 from aiosendspin.models.types import GoodbyeReason, PairMethod
 from aiosendspin.noise.keys import Identity, generate_psk
 from aiosendspin.noise.pairing import PairingAttempt
@@ -436,21 +435,6 @@ def test_should_retry_false_when_closing() -> None:
     assert conn.should_retry_server_initiated_connection is True
     conn._closing = True  # noqa: SLF001
     assert conn.should_retry_server_initiated_connection is False
-
-
-def test_negotiated_dynamic_pin_length_falls_back_on_bad_client_floor() -> None:
-    """An unusable client dynamic-PIN floor falls back to the server's, keeping pairing alive."""
-    server = MagicMock()
-    server.min_pin_length = 6
-    conn = SendspinConnection(server, wsock_client=MagicMock(spec=ClientWebSocketResponse))
-    conn._client_info = ClientHelloPayload(  # noqa: SLF001
-        name="c",
-        supported_roles=[],
-        supported_pair_methods=[
-            PairMethodDescriptor(method=PairMethod.DYNAMIC_PIN, min_pin_length=3),
-        ],
-    )
-    assert conn._negotiated_dynamic_pin_length() == 6  # noqa: SLF001
 
 
 @pytest.mark.asyncio
