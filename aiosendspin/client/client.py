@@ -32,6 +32,7 @@ from aiosendspin.models.visualizer import ClientHelloVisualizerSupport, Visualiz
 from aiosendspin.noise.driver import HandshakeAbortedError
 from aiosendspin.noise.keys import Identity
 from aiosendspin.noise.pairing import PairingError
+from aiosendspin.noise.session import NoiseCipherSuite
 from aiosendspin.noise.trust_store import ClientPairingStore, ResolvedPsk
 
 from .connection import DECODABLE_CODECS, UNSYNCED_PLAY_LEAD_US, SendspinConnection
@@ -79,6 +80,9 @@ AudioChunkCallback = Callable[[int, bytes, AudioFormat], None]
 
 # Callback invoked when the client disconnects from the server.
 DisconnectCallback = Callable[[], None]
+
+# Callback invoked with the abort reason when a non-closing pairing attempt ends.
+PairingAbortCallback = Callable[[PairAbortReason], None]
 
 # Callback invoked when server sends player commands (volume, mute).
 ServerCommandCallback = Callable[[ServerCommandPayload], None]
@@ -162,6 +166,8 @@ class SendspinClient:
     """Callbacks invoked when audio chunks are received."""
     _disconnect_callbacks: list[DisconnectCallback]
     """Callbacks invoked when the client disconnects."""
+    _pairing_abort_callbacks: list[PairingAbortCallback]
+    """Callbacks invoked when a non-closing pairing attempt ends with an abort reason."""
     _server_command_callbacks: list[ServerCommandCallback]
     """Callbacks invoked when server sends player commands."""
     _visualizer_callbacks: list[VisualizerCallback]
@@ -197,6 +203,7 @@ class SendspinClient:
         pin_display: Callable[[str | None], Awaitable[None]] | None = None,
         pairing_window: Callable[[], Awaitable[None]] | None = None,
         clock: Clock | None = None,
+        cipher_suite: NoiseCipherSuite = NoiseCipherSuite.CHACHAPOLY,
     ) -> None:
         """Create a new Sendspin client instance."""
         self._identity = identity
@@ -208,6 +215,7 @@ class SendspinClient:
         self._pin_display = pin_display
         self._pairing_window = pairing_window
         self._clock: Clock = clock or RawMonotonicClock()
+        self._cipher_suite = cipher_suite
 
         # Validate and store player support
         if Roles.PLAYER in self._roles:
@@ -245,6 +253,7 @@ class SendspinClient:
 
         self._provisional_connections = set()
         self._admission_lock = asyncio.Lock()
+        self._last_playback_loaded = False
 
         # Initialize callback lists
         self._metadata_callbacks = []
@@ -256,6 +265,7 @@ class SendspinClient:
         self._stream_clear_callbacks = []
         self._audio_chunk_callbacks = []
         self._disconnect_callbacks = []
+        self._pairing_abort_callbacks = []
         self._server_command_callbacks = []
         self._visualizer_callbacks = []
         self._artwork_callbacks = []
@@ -266,6 +276,11 @@ class SendspinClient:
     def identity(self) -> Identity:
         """This client's static public X25519 identity."""
         return self._identity
+
+    @property
+    def cipher_suite(self) -> NoiseCipherSuite:
+        """Noise cipher suite this client picks for its handshakes."""
+        return self._cipher_suite
 
     @property
     def client_name(self) -> str:
@@ -502,6 +517,7 @@ class SendspinClient:
 
         # Hold the lock only for the admit/reject decision, not for start()/pairing.
         async with self._admission_lock:
+            await self._ensure_last_playback_loaded()
             if not self._should_admit_connection(connection):
                 await self._reject_connection(connection)
                 return
@@ -560,13 +576,25 @@ class SendspinClient:
             )
         return True
 
+    async def _ensure_last_playback_loaded(self) -> None:
+        """Load the persisted last-playback server once, seeding the discovery tiebreak."""
+        if self._last_playback_loaded:
+            return
+        self._last_playback_loaded = True
+        if self.last_playback_server_id is None:
+            self.last_playback_server_id = await self._pairing_store.get_last_playback_server_id()
+
     async def _admit_connection(self, connection: SendspinConnection) -> None:
         """Make ``connection`` the admitted one, displacing any prior holder."""
         previous = self._admitted_connection
         if previous is connection:
             return
         self._admitted_connection = connection
+        before = self.last_playback_server_id
         self.note_playback_activity(connection)
+        if self.last_playback_server_id != before:
+            self._last_playback_loaded = True
+            await self._pairing_store.set_last_playback_server_id(self.last_playback_server_id)
         if previous is not None:
             await self._dismiss_connection(previous, GoodbyeReason.ANOTHER_SERVER)
             await previous.disconnect()
@@ -788,6 +816,19 @@ class SendspinClient:
             else None
         )
 
+    def add_pairing_abort_listener(self, callback: PairingAbortCallback) -> Callable[[], None]:
+        """Add a listener for non-closing pairing aborts (locked_out, pin_mismatch, ...).
+
+        Returns:
+            A function that removes this listener when called.
+        """
+        self._pairing_abort_callbacks.append(callback)
+        return lambda: (
+            self._pairing_abort_callbacks.remove(callback)
+            if callback in self._pairing_abort_callbacks
+            else None
+        )
+
     def add_server_command_listener(self, callback: ServerCommandCallback) -> Callable[[], None]:
         """Add a listener for server command events.
 
@@ -891,6 +932,14 @@ class SendspinClient:
                 callback()
             except Exception:
                 logger.exception("Error in disconnect callback %s", callback)
+
+    def notify_pairing_abort_callback(self, reason: PairAbortReason) -> None:
+        """Dispatch a non-closing pairing abort to the registered listeners."""
+        for callback in list(self._pairing_abort_callbacks):
+            try:
+                callback(reason)
+            except Exception:
+                logger.exception("Error in pairing abort callback %s", callback)
 
     def notify_server_command_callback(self, payload: ServerCommandPayload) -> None:
         """Dispatch a server/command to the registered listeners."""

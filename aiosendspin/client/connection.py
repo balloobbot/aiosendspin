@@ -92,7 +92,6 @@ from aiosendspin.noise.pairing import (
     run_pairing_psk_client,
     run_static_pin_client,
 )
-from aiosendspin.noise.session import NoiseCipherSuite
 from aiosendspin.noise.trust_store import PskCategory, ResolvedPsk
 from aiosendspin.noise.wire import EncryptedWebSocket
 
@@ -125,8 +124,8 @@ _ManagementRequest = (
     | ManagementSetPairingConfigMessage
 )
 
-# A provisional (incoming) connection must complete bring-up through its first
-# server/activate within this window or be dropped (spec: multi-server admission).
+# A provisional connection must complete bring-up through its first server/activate
+# within this window or be dropped (spec: multi-server admission).
 PROVISIONAL_CONNECTION_TIMEOUT_S: float = 30.0
 
 # Backstop for the post-pairing transition (re-handshake → hello → activate); the per-message
@@ -300,13 +299,21 @@ class SendspinConnection:
         self, raw_ws: ClientWebSocketResponse, *, expected_server_id: str | None
     ) -> None:
         """Run the handshake over a client-initiated ``raw_ws`` and bring the connection up."""
-        await self._run_noise_handshake(raw_ws, expected_server_id=expected_server_id)
-        await self._run_inner_handshake()
+        await self._bring_up(raw_ws, expected_server_id=expected_server_id)
 
     async def attach_websocket(
         self, ws: web.WebSocketResponse, *, expected_server_id: str | None
     ) -> None:
         """Run the handshake over an incoming ``ws`` and bring the connection up."""
+        await self._bring_up(ws, expected_server_id=expected_server_id)
+
+    async def _bring_up(
+        self,
+        ws: ClientWebSocketResponse | web.WebSocketResponse,
+        *,
+        expected_server_id: str | None,
+    ) -> None:
+        """Reach the first server/activate under a bring-up timeout, closing on stall."""
         try:
             async with asyncio.timeout(PROVISIONAL_CONNECTION_TIMEOUT_S):
                 await self._run_noise_handshake(ws, expected_server_id=expected_server_id)
@@ -335,7 +342,7 @@ class SendspinConnection:
             result = await run_handshake_client(
                 raw_ws,
                 local_identity=self._client.identity,
-                suite=NoiseCipherSuite.CHACHAPOLY,
+                suite=self._client.cipher_suite,
                 psk_resolver=self._resolve_psk,
                 expected_server_id=expected_server_id,
             )
@@ -493,6 +500,7 @@ class SendspinConnection:
                     logger.info(
                         "Pairing attempt with %s ended: %s", self._server_id, err.reason.value
                     )
+                    self._client.notify_pairing_abort_callback(err.reason)
                 return
             if (reason := await self._apply_activation(activate)) is not None:
                 await self._goodbye_and_disconnect(reason)
@@ -824,7 +832,8 @@ class SendspinConnection:
         min_pin_length = None
         out_channels = None
         if method is PairMethod.DYNAMIC_PIN:
-            out_channels = ["display"]
+            # Advertise the display channel only when a handler can actually surface the PIN.
+            out_channels = ["display"] if self._client.pin_display is not None else []
             config = await self._client.pairing_store.get_pairing_config()
             min_pin_length = config.dynamic_pin_min_length
         return PairMethodDescriptor(
