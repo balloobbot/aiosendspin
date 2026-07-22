@@ -135,13 +135,6 @@ class PlaybackStateType(Enum):
     STOPPED = "stopped"
 
 
-class PlayerState(Enum):
-    """Player-level availability state carried by the legacy player/client `state` field."""
-
-    SYNCHRONIZED = "synchronized"
-    EXTERNAL_SOURCE = "external_source"
-
-
 class AudioCodec(Enum):
     """Enum for Audio Codecs."""
 

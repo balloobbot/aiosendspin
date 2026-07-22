@@ -37,7 +37,6 @@ from .types import (
     GoodbyeReason,
     PairMethod,
     PlaybackStateType,
-    PlayerState,
     Roles,
     ServerMessage,
     TrustLevel,
@@ -313,7 +312,7 @@ class ClientStatePayload(DataClassORJSONMixin):
         d = dict(d)
         legacy_state = "state" in d
         if d.get("available") is None and legacy_state:
-            d["available"] = d["state"] != PlayerState.EXTERNAL_SOURCE.value
+            d["available"] = d["state"] != "external_source"
         # Always overwrite so a client cannot spoof the record via the wire.
         d["legacy_state_used"] = legacy_state or None
         return d
