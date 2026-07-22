@@ -310,6 +310,16 @@ async def test_file_client_store_persists_state(tmp_path: Path) -> None:
     assert await reloaded.pin_failure_count(PairMethod.DYNAMIC_PIN) == 1
 
 
+async def test_file_client_store_persists_last_playback_server(tmp_path: Path) -> None:
+    """The last-playback server id survives a reload (discovery tiebreak across restarts)."""
+    path = tmp_path / "client.json"
+    store = await FileClientPairingStore.open(path)
+    await store.set_last_playback_server_id("server-X")
+
+    reloaded = await FileClientPairingStore.open(path)
+    assert await reloaded.get_last_playback_server_id() == "server-X"
+
+
 async def test_file_client_store_pairing_outcome_generates_per_server_record(
     tmp_path: Path,
 ) -> None:
@@ -414,6 +424,19 @@ async def test_client_store_remove_and_list(client_store: ClientPairingStore) ->
     assert added == {b}
     # Removing an absent record is a no-op.
     await client_store.remove_record("absent")
+
+
+async def test_client_store_replace_record_drops_prior_for_server(
+    client_store: ClientPairingStore,
+) -> None:
+    """Re-pairing a server leaves a single record, keyed by the newest psk_id."""
+    old = _client_record(server_id="server-X")
+    await client_store.store_record(old)
+    new = _client_record(server_id="server-X")
+    await client_store.replace_record_for_server_id(new)
+    for_server = [r for r in await client_store.list_records() if r.server_id == "server-X"]
+    assert for_server == [new]
+    assert await client_store.record_by_psk_id(old.psk_id) is None
 
 
 async def test_client_store_reports_no_storage_accounting_by_default(

@@ -196,6 +196,32 @@ async def test_static_pin_server_rejects_non_8_digit_operator_pin() -> None:
     assert await server_store.record_by_client_id("client-X") is None
 
 
+async def test_static_pin_server_rejects_dynamic_only_commit_b() -> None:
+    """A static-PIN pair-init carrying commit_B is a protocol error (dynamic-only field)."""
+    client_ews, server_ews, _client_raw, server_raw = _paired_encrypted_ws()
+    server_store = InMemoryServerPairingStore()
+
+    await client_ews.send_str(
+        ClientPairInitMessage(
+            payload=ClientPairInitPayload(
+                pairing_index=0,
+                commit_B=b64url_encode(pin_mod.commit(pin_mod.generate_nonce())),
+            )
+        ).to_json(),
+    )
+    with pytest.raises(PairingError, match="commit_B for static PIN"):
+        await run_static_pin_server(
+            server_ews,
+            handshake_hash=_HANDSHAKE_HASH,
+            pairing_index=0,
+            pin_provider=_pin,
+            client_id="client-X",
+            store=server_store,
+        )
+    assert server_raw.sent == []
+    assert await server_store.record_by_client_id("client-X") is None
+
+
 async def test_dynamic_pin_server_times_out_mid_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
