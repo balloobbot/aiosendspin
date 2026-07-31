@@ -480,12 +480,20 @@ class ClientPairingStore(ABC):
         return not await self._record_mode_references(psk_id)
 
     async def replace_record_for_server_id(self, record: ClientPairingRecord) -> None:
-        """Persist ``record``, dropping any prior removable record bound to the same server."""
-        stale = [
-            existing.psk_id
-            for existing in await self.list_records()
-            if existing.server_id == record.server_id and existing.psk_id != record.psk_id
-        ]
+        """Persist ``record``, dropping any prior removable record bound to the same server.
+
+        A record without a ``server_id`` is shared and binds to no server, so it only
+        ever gets stored.
+        """
+        stale = (
+            [
+                existing.psk_id
+                for existing in await self.list_records()
+                if existing.server_id == record.server_id and existing.psk_id != record.psk_id
+            ]
+            if record.server_id is not None
+            else []
+        )
         await self.store_record(record)
         for psk_id in stale:
             if await self.can_remove_record(psk_id):

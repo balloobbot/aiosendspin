@@ -300,9 +300,22 @@ async def test_note_playback_activity_ignores_non_admitted() -> None:
     client._admitted_connection = admitted  # type: ignore[assignment]
     other = _FakeConnection(server_id="server-B", activities=[Activity.PLAYBACK], client=client)
 
-    client.note_playback_activity(other)  # type: ignore[arg-type]
+    await client.note_playback_activity(other)  # type: ignore[arg-type]
 
     assert client.last_playback_server_id is None
+
+
+async def test_note_playback_activity_persists_later_activation() -> None:
+    """A server/activate that adds playback after admission is persisted, not just cached."""
+    store = InMemoryClientPairingStore()
+    client = make_sdk_client(client_name="c", roles=[Roles.CONTROLLER], pairing_store=store)
+    admitted = _FakeConnection(server_id="server-A", activities=[], client=client)
+    client._admitted_connection = admitted  # type: ignore[assignment]
+    admitted.activities = [Activity.PLAYBACK]  # a later activate declares playback
+
+    await client.note_playback_activity(admitted)  # type: ignore[arg-type]
+
+    assert await store.get_last_playback_server_id() == "server-A"
 
 
 # --- on_connection_closed ---

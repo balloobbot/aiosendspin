@@ -481,6 +481,7 @@ class SendspinClient:
 
         # Hold the lock only for the admit decision, not for start()/pairing.
         async with self._admission_lock:
+            await self._ensure_last_playback_loaded()
             await self._admit_connection(connection)
         await connection.start()
 
@@ -590,23 +591,21 @@ class SendspinClient:
         if previous is connection:
             return
         self._admitted_connection = connection
-        before = self.last_playback_server_id
-        self.note_playback_activity(connection)
-        if self.last_playback_server_id != before:
-            self._last_playback_loaded = True
-            await self._pairing_store.set_last_playback_server_id(self.last_playback_server_id)
+        await self.note_playback_activity(connection)
         if previous is not None:
             await self._dismiss_connection(previous, GoodbyeReason.ANOTHER_SERVER)
             await previous.disconnect()
 
-    def note_playback_activity(self, connection: SendspinConnection) -> None:
+    async def note_playback_activity(self, connection: SendspinConnection) -> None:
         """Record the admitted server as last-playback when it carries the playback activity."""
         if (
             connection is self._admitted_connection
             and Activity.PLAYBACK in connection.activities
             and connection.server_id is not None
+            and connection.server_id != self.last_playback_server_id
         ):
             self.last_playback_server_id = connection.server_id
+            await self._pairing_store.set_last_playback_server_id(connection.server_id)
 
     async def _reject_connection(self, connection: SendspinConnection) -> None:
         """Refuse an incoming connection that lost arbitration."""
